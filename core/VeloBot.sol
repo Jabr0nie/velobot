@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity =0.7.6;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 
-// Velodrome Slipstream Pool Interface (from provided ICLPoolActions)
+// Pool interfaces
 interface ICLPoolActions {
     function swap(
         address recipient,
@@ -15,104 +14,99 @@ interface ICLPoolActions {
     ) external returns (int256 amount0, int256 amount1);
 }
 
-contract DirectPoolSwap {
-    using SafeERC20 for IERC20;
+interface ICLPoolState {
+    function slot0()
+        external
+        view
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            bool unlocked
+        );
+}
 
-    address public immutable pool; // USDC/VELO pool address
+interface ICLSwapCallback {
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external;
+}
+
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+}
+
+contract DirectPoolSwap is ICLSwapCallback {
+    address public constant pool = 0x7cfc2Da3ba598ef4De692905feDcA32565AB836E; // USDC/VELO pool address
     address public constant USDC = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85; // USDC on Optimism
     address public constant VELO = 0x9560e827aF36c94D2Ac33a39bCE1Fe78631088Db; // VELO on Optimism
-    bool public immutable zeroForOne; // True if USDC is token0, false if VELO is token0
 
-    // Event to log swaps
+    address public admin;
+
     event SwapExecuted(address indexed user, uint256 amountIn, uint256 amountOut);
 
-    constructor(address _pool, bool _zeroForOne) {
-        pool = _pool;
-        zeroForOne = _zeroForOne;
+    constructor() {
+        admin = msg.sender;
     }
 
-    /// @notice Swaps a fixed amount of USDC for VELO directly with the pool
-    /// @param amountIn The amount of USDC to swap
-    /// @param amountOutMinimum The minimum amount of VELO to receive
-    /// @param deadline The timestamp after which the transaction will revert
-    /// @param sqrtPriceLimitX96 The price limit for the swap (0 for no limit)
-    /// @return amountOut The amount of VELO received
-    function swapExactInputSingle(
-        uint256 amountIn,
-        uint256 amountOutMinimum,
-        uint256 deadline,
-        uint160 sqrtPriceLimitX96
-    ) external returns (uint256 amountOut) {
-        // Ensure deadline is in the future
-        require(deadline >= block.timestamp, "Swap deadline expired");
+    function _newAdmin(address newAdmin) external {
+        require(msg.sender == admin, "Only owner can do this");
+        admin = newAdmin;
+    }
+
+    function transferToAdmin(address Token) external {
+        uint256 value = IERC20(Token).balanceOf(address(this));
+        IERC20(Token).transfer(admin, value);
+    }
+
+    function V3SwapUSDCtoVelo() external {
+        uint256 amountIn = IERC20(USDC).balanceOf(address(this));
         require(amountIn > 0, "Invalid input amount");
 
-        // Transfer USDC to this contract
-        IERC20(USDC).safeTransferFrom(msg.sender, address(this), amountIn);
+        // Get current sqrtPriceX96 from the pool
+        (uint160 sqrtPriceX96, , , , , ) = ICLPoolState(pool).slot0();
+        uint160 sqrtPriceLimitX96 = uint160(sqrtPriceX96 * 99 / 100); // 1% slippage
 
-      IERC20(USDC).approve(pool, amountIn);
+        // Ensure valid range
+        if (sqrtPriceLimitX96 <= TickMath.MIN_SQRT_RATIO) {
+            sqrtPriceLimitX96 = TickMath.MIN_SQRT_RATIO + 1;
+        }
 
-        // Prepare swap data to pass to callback
-        bytes memory data = abi.encode(msg.sender, amountOutMinimum);
+        // Approve pool to spend USDC
+        IERC20(USDC).approve(pool, amountIn);
+
+        // Prepare data for callback (not strictly needed here, but included for completeness)
+        bytes memory data = abi.encode(address(this));
 
         // Call the pool's swap function
-        (int256 amount0, int256 amount1) = ICLPoolActions(pool).swap(
-            address(this), // Recipient of output tokens (this contract)
-            zeroForOne, // Direction of swap (USDC -> VELO or VELO -> USDC)
-            int256(amountIn), // Positive for exact input
-            sqrtPriceLimitX96, // Price limit (0 for no limit)
-            data // Pass data to callback
+        ICLPoolActions(pool).swap(
+            address(this),     // recipient
+            true,              // zeroForOne: USDC -> VELO
+            int256(amountIn),  // exact input
+            sqrtPriceLimitX96, // price limit
+            data               // callback data
         );
-
-        // Calculate amountOut based on token order
-        amountOut = zeroForOne ? uint256(-amount1) : uint256(-amount0);
-
-        // Ensure minimum output is met
-        require(amountOut >= amountOutMinimum, "Insufficient output amount");
-
-        // Transfer VELO to the caller
-        IERC20(VELO).safeTransfer(msg.sender, amountOut);
-
-        // Emit event
-        emit SwapExecuted(msg.sender, amountIn, amountOut);
-
-        return amountOut;
     }
 
-    /// @notice Callback function called by the pool during the swap
-    /// @param amount0Delta The change in token0 balance (negative if we pay, positive if we receive)
-    /// @param amount1Delta The change in token1 balance (negative if we pay, positive if we receive)
-    /// @param data Data passed from the swap call
+    // This is the required callback for the pool to call after swap
     function uniswapV3SwapCallback(
         int256 amount0Delta,
         int256 amount1Delta,
-        bytes calldata data
-    ) external {
-        // Verify the caller is the pool
-        require(msg.sender == pool, "Invalid caller");
+        bytes calldata /* data */
+    ) external override {
+        require(msg.sender == pool, "Callback only from pool");
 
-        // Decode data
-        (address recipient, uint256 amountOutMinimum) = abi.decode(data, (address, uint256));
-
-        // Determine input and output amounts
-        uint256 amountToPay;
-        address tokenToPay;
-
-        if (zeroForOne) {
-            // USDC -> VELO: We pay token0 (USDC), receive token1 (VELO)
-            require(amount0Delta > 0, "Invalid amount0Delta");
-            require(amount1Delta < 0, "Invalid amount1Delta");
-            amountToPay = uint256(amount0Delta);
-            tokenToPay = USDC;
-        } else {
-            // VELO -> USDC: We pay token1 (VELO), receive token0 (USDC)
-            require(amount1Delta > 0, "Invalid amount1Delta");
-            require(amount0Delta < 0, "Invalid amount0Delta");
-            amountToPay = uint256(amount1Delta);
-            tokenToPay = VELO;
+        // If amount0Delta > 0, we must pay that amount of USDC to the pool
+        if (amount0Delta > 0) {
+            IERC20(USDC).transfer(pool, uint256(amount0Delta));
         }
-
-        // Transfer the input tokens to the pool
-        IERC20(tokenToPay).safeTransfer(pool, amountToPay);
+        // If amount1Delta > 0, we must pay that amount of VELO to the pool (not expected in USDC->VELO swap)
+        if (amount1Delta > 0) {
+            IERC20(VELO).transfer(pool, uint256(amount1Delta));
+        }
     }
 }
