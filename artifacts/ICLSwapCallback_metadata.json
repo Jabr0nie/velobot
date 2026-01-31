@@ -1,0 +1,77 @@
+{
+	"compiler": {
+		"version": "0.7.6+commit.7338295f"
+	},
+	"language": "Solidity",
+	"output": {
+		"abi": [
+			{
+				"inputs": [
+					{
+						"internalType": "int256",
+						"name": "amount0Delta",
+						"type": "int256"
+					},
+					{
+						"internalType": "int256",
+						"name": "amount1Delta",
+						"type": "int256"
+					},
+					{
+						"internalType": "bytes",
+						"name": "data",
+						"type": "bytes"
+					}
+				],
+				"name": "uniswapV3SwapCallback",
+				"outputs": [],
+				"stateMutability": "nonpayable",
+				"type": "function"
+			}
+		],
+		"devdoc": {
+			"kind": "dev",
+			"methods": {},
+			"version": 1
+		},
+		"userdoc": {
+			"kind": "user",
+			"methods": {},
+			"version": 1
+		}
+	},
+	"settings": {
+		"compilationTarget": {
+			"core/VeloBot.sol": "ICLSwapCallback"
+		},
+		"evmVersion": "istanbul",
+		"libraries": {},
+		"metadata": {
+			"bytecodeHash": "ipfs"
+		},
+		"optimizer": {
+			"enabled": true,
+			"runs": 200
+		},
+		"remappings": []
+	},
+	"sources": {
+		"@uniswap/v3-core/contracts/libraries/TickMath.sol": {
+			"keccak256": "0xda8c2c0b12d2976acfd364453ba5f5bf0117ba3c91175ee9e1067d3fb26944d9",
+			"license": "GPL-2.0-or-later",
+			"urls": [
+				"bzz-raw://3f3d2d7c2723c91830c74d96292f28fc1cfe28d388cdb9c1a5ebadb4c2b96f81",
+				"dweb:/ipfs/QmYU4wk8MEm33wVWR38LoncvR7b8PP1mLuGBKX3dUpYJVE"
+			]
+		},
+		"core/VeloBot.sol": {
+			"keccak256": "0xdaf97379c180410b26c6eaaf23a82510f522b38420d89d09fe3738e94579050a",
+			"license": "MIT",
+			"urls": [
+				"bzz-raw://7a73f84d7337fbf6fc013cdab3c363560f86a950296c79a27c4e77d5df59b54f",
+				"dweb:/ipfs/QmU5i2EY5dGwNiHjFtgjBsd38B8R9VVeRhXyfEz8WoYP37"
+			]
+		}
+	},
+	"version": 1
+}
